@@ -12,8 +12,8 @@ from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 # ===============================
 # CONFIG
 # ===============================
-INACTIVITY_LIMIT = 15 * 60       # seconds
-REMINDER_INTERVAL = 6#60 * 60      # seconds
+INACTIVITY_LIMIT = 10 * 60       # seconds
+REMINDER_INTERVAL = 60 * 60      # seconds
 POLL_INTERVAL_MS = 2000          # 2s
 
 BEEP_FREQ = 800
