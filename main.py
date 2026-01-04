@@ -261,19 +261,54 @@ class ScreenBreakTray:
         else:
             mins = seconds / 60
             return f"{mins:g}m"
+            
+    def _fmt_mmss(self, seconds: float) -> str:
+        seconds = max(0.0, float(seconds))
+        if seconds < 60:
+            return f"{int(round(seconds))}s"
+        mins = int(seconds // 60)
+        secs = int(round(seconds - 60 * mins))
+        if secs == 60:
+            mins += 1
+            secs = 0
+        return f"{mins}m {secs:02d}s"
+
+    def _fmt_mins_only(self, seconds: float) -> str:
+        # for the "X mins" wording; show fractional minutes if < 2 minutes
+        seconds = max(0.0, float(seconds))
+        mins = seconds / 60.0
+        if mins < 2:
+            return f"{mins:.1f}"
+        return f"{int(round(mins))}"
 
     def _tooltip_text(self, state: str) -> str:
         mode_txt = "Voice" if self.mode == "voice" else "Beep"
         mute_txt = "Muted" if self.muted else "Sound on"
-        fs_txt = "FS off" if self.disable_fullscreen else "FS on"
+        fs_txt = "NoFS" if self.disable_fullscreen else "FSok"
 
-        rem_txt = self._fmt_time(self.reminder_interval_s)
-        idle_txt = self._fmt_time(self.inactivity_limit_s)
+        if not self.active:
+            idle = get_idle_time_seconds()
+            return (
+                f"ScreenBreak: Inactive\n"
+                f"Last input: {self._fmt_mmss(idle)} ago\n"
+                f"Settings: {mode_txt}, {mute_txt}, Remind {self._fmt_mmss(self.reminder_interval_s)}, "
+                f"Idle {self._fmt_mmss(self.inactivity_limit_s)}, {fs_txt}"
+            )
+
+        # Active: show "worked so far" and "next stop in"
+        now = time.time()
+        worked_s = now - self.last_reminder_time
+        remaining_s = max(0.0, self.reminder_interval_s - worked_s)
+
+        worked_m = self._fmt_mins_only(worked_s)
+        remaining_m = self._fmt_mins_only(remaining_s)
 
         return (
-            f"ScreenBreak: {state} | {mode_txt} | {mute_txt} | "
-            f"Remind {rem_txt} | Idle {idle_txt} | {fs_txt}"
+            f"Have been working for {worked_m} mins. Next stop in {remaining_m} mins.\n"
+            f"Settings: {mode_txt}, {mute_txt}, Remind {self._fmt_mmss(self.reminder_interval_s)}, "
+            f"Idle {self._fmt_mmss(self.inactivity_limit_s)}, {fs_txt}"
         )
+
 
     def _update_tooltip(self):
         self.tray.setToolTip(self._tooltip_text("Active" if self.active else "Inactive"))
@@ -343,6 +378,9 @@ class ScreenBreakTray:
         if (now - self.last_reminder_time) >= self.reminder_interval_s:
             self._do_reminder()
             self.last_reminder_time = now
+            
+        self._update_tooltip()
+
 
     def _quit(self):
         self.timer.stop()
