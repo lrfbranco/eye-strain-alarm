@@ -124,6 +124,17 @@ def speak_windows_tts(text: str, repeat: int = 2, pause_ms: int = 150):
         creationflags=subprocess.CREATE_NO_WINDOW
     )
 
+# ===============================
+# For beeping.
+# ===============================
+def beep_chirp(
+    freqs=(600, 800, 1000),
+    dur_ms=90,
+    gap_ms=20
+):
+    for f in freqs:
+        winsound.Beep(int(f), int(dur_ms))
+        time.sleep(gap_ms / 1000.0)
 
 # ===============================
 # Tray app
@@ -310,7 +321,7 @@ class ScreenBreakTray:
             return
 
         if self.mode == "beep":
-            winsound.Beep(BEEP_FREQ, BEEP_DUR)
+            beep_chirp()
         else:
             speak_windows_tts(VOICE_TEXT)
 
