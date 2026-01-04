@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 # CONFIG
 # ===============================
 INACTIVITY_LIMIT = 15 * 60       # seconds
-REMINDER_INTERVAL = 60 * 60      # seconds
+REMINDER_INTERVAL = 6#60 * 60      # seconds
 POLL_INTERVAL_MS = 2000          # 2s
 
 BEEP_FREQ = 800
@@ -94,7 +94,7 @@ def is_foreground_fullscreen() -> bool:
 # ===============================
 # WINDOWS: reliable TTS via PowerShell (SAPI)
 # ===============================
-def speak_windows_tts(text: str, repeat: int = 3, pause_ms: int = 300):
+def speak_windows_tts(text: str, repeat: int = 2, pause_ms: int = 150):
     # Uses Windows built-in System.Speech (SAPI)
     safe = text.replace("'", "''")
 
