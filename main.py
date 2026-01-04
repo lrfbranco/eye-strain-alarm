@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 # DEFAULTS (can be changed from tray menu)
 # ===============================
 DEFAULT_REMINDER_INTERVAL_MIN = 60
-DEFAULT_INACTIVITY_LIMIT_MIN = 10
+DEFAULT_INACTIVITY_LIMIT_MIN = 15
 
 POLL_INTERVAL_MS = 2000  # 2s
 
@@ -65,6 +65,11 @@ def is_foreground_fullscreen() -> bool:
     hwnd = user32.GetForegroundWindow()
     if not hwnd:
         return False
+    
+    # If it's just a maximized window, treat as NOT fullscreen
+    # (helps with Groupy/tabbed apps / borderless maximized)
+    if user32.IsZoomed(hwnd):
+        return False
 
     wr = RECT()
     if not user32.GetWindowRect(hwnd, ctypes.byref(wr)):
@@ -87,12 +92,6 @@ def is_foreground_fullscreen() -> bool:
         abs(wr.right - mi.rcMonitor.right) <= tol and
         abs(wr.bottom - mi.rcMonitor.bottom) <= tol
     )
-
-    if not full:
-        win_area = _rect_area(wr)
-        mon_area = _rect_area(mi.rcMonitor)
-        if mon_area > 0 and win_area / mon_area >= 0.98:
-            full = True
 
     return full
 
@@ -150,6 +149,9 @@ class ScreenBreakTray:
         self.muted = False
         self.mode = "voice"  # "beep" or "voice"
         self.disable_fullscreen = True
+        self._fs_paused = False
+        self._fs_remaining_s = None
+
 
         # User-adjustable timers (seconds)
         self.reminder_interval_s = DEFAULT_REMINDER_INTERVAL_MIN * 60
@@ -286,10 +288,10 @@ class ScreenBreakTray:
         mute_txt = "Muted" if self.muted else "Sound on"
         fs_txt = "NoFS" if self.disable_fullscreen else "FSok"
 
-        if not self.active:
+        if not self.active or self._fs_paused:
             idle = get_idle_time_seconds()
             return (
-                f"ScreenBreak: Inactive\n"
+                f"App is Inactive.\n"
                 f"Last input: {self._fmt_mmss(idle)} ago\n"
                 f"Settings: {mode_txt}, {mute_txt}, Remind {self._fmt_mmss(self.reminder_interval_s)}, "
                 f"Idle {self._fmt_mmss(self.inactivity_limit_s)}, {fs_txt}"
@@ -369,12 +371,23 @@ class ScreenBreakTray:
 
         self._set_active()
 
-        if self.disable_fullscreen and is_foreground_fullscreen():
-            # Don't remind while fullscreen; keep pushing timer forward
-            self.last_reminder_time = time.time()
-            return
-
         now = time.time()
+        if self.disable_fullscreen and is_foreground_fullscreen():
+            # Pause countdown (do NOT reset work timer)
+            if not self._fs_paused:
+                worked_s = now - self.last_reminder_time
+                self._fs_remaining_s = max(0.0, self.reminder_interval_s - worked_s)
+                self._fs_paused = True
+            self._update_tooltip()
+            return
+        else:
+            # Resume countdown after leaving fullscreen
+            if self._fs_paused:
+                # Reconstruct last_reminder_time so remaining time is preserved
+                self.last_reminder_time = now - (self.reminder_interval_s - self._fs_remaining_s)
+                self._fs_paused = False
+                self._fs_remaining_s = None
+
         if (now - self.last_reminder_time) >= self.reminder_interval_s:
             self._do_reminder()
             self.last_reminder_time = now
