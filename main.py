@@ -18,7 +18,7 @@ POLL_INTERVAL_MS = 2000          # 2s
 
 BEEP_FREQ = 800
 BEEP_DUR = 200
-VOICE_TEXT = "Take a break now"
+VOICE_TEXT = "Blink"
 
 # ===============================
 # WINDOWS: idle time
@@ -94,9 +94,11 @@ def is_foreground_fullscreen() -> bool:
 # ===============================
 # WINDOWS: reliable TTS via PowerShell (SAPI)
 # ===============================
-def speak_windows_tts(text: str):
-    # Uses Windows built-in System.Speech; spawns a background PowerShell process.
+def speak_windows_tts(text: str, repeat: int = 3, pause_ms: int = 300):
+    # Uses Windows built-in System.Speech (SAPI)
     safe = text.replace("'", "''")
+
+    # PowerShell loop with sleep between repetitions
     cmd = [
         "powershell",
         "-NoProfile",
@@ -105,10 +107,18 @@ def speak_windows_tts(text: str):
         (
             "Add-Type -AssemblyName System.Speech; "
             "$speak = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-            f"$speak.Speak('{safe}');"
+            f"for ($i = 0; $i -lt {repeat}; $i++) {{ "
+            f"$speak.Speak('{safe}'); "
+            f"Start-Sleep -Milliseconds {pause_ms}; "
+            "}"
         )
     ]
-    subprocess.Popen(cmd, creationflags=subprocess.CREATE_NO_WINDOW)
+
+    subprocess.Popen(
+        cmd,
+        creationflags=subprocess.CREATE_NO_WINDOW
+    )
+
 
 # ===============================
 # Tray app
