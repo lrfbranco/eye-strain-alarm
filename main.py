@@ -6,19 +6,24 @@ import winsound
 import subprocess
 
 from PySide6.QtCore import QTimer
-from PySide6.QtGui import QAction, QIcon, QPixmap, QColor
+from PySide6.QtGui import QAction, QIcon, QPixmap, QColor, QActionGroup
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon, QMenu
 
 # ===============================
-# CONFIG
+# DEFAULTS (can be changed from tray menu)
 # ===============================
-INACTIVITY_LIMIT = 10 * 60       # seconds
-REMINDER_INTERVAL = 60 * 60      # seconds
-POLL_INTERVAL_MS = 2000          # 2s
+DEFAULT_REMINDER_INTERVAL_MIN = 60
+DEFAULT_INACTIVITY_LIMIT_MIN = 10
+
+POLL_INTERVAL_MS = 2000  # 2s
 
 BEEP_FREQ = 800
 BEEP_DUR = 200
 VOICE_TEXT = "Blink"
+
+# Presets shown in tray menu (minutes)
+REMINDER_PRESETS_MIN = [.10, .25, 30, 60, 90, 120]
+INACTIVITY_PRESETS_MIN = [5, 10, 15, 20, 30]
 
 # ===============================
 # WINDOWS: idle time
@@ -125,7 +130,8 @@ def speak_windows_tts(text: str, repeat: int = 2, pause_ms: int = 150):
 # ===============================
 class ScreenBreakTray:
     def __init__(self):
-        self.base_dir = os.path.dirname(os.path.abspath(__file__))
+        # PyInstaller-safe base directory for bundled assets
+        self.base_dir = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 
         # State
         self.active = False
@@ -134,6 +140,10 @@ class ScreenBreakTray:
         self.mode = "voice"  # "beep" or "voice"
         self.disable_fullscreen = True
 
+        # User-adjustable timers (seconds)
+        self.reminder_interval_s = DEFAULT_REMINDER_INTERVAL_MIN * 60
+        self.inactivity_limit_s = DEFAULT_INACTIVITY_LIMIT_MIN * 60
+
         # Icons
         self.icon_active = self._load_icon("active.ico", fallback_color=QColor(0, 180, 0))
         self.icon_inactive = self._load_icon("inactive.ico", fallback_color=QColor(180, 180, 180))
@@ -141,10 +151,11 @@ class ScreenBreakTray:
         # Tray
         self.tray = QSystemTrayIcon()
         self.tray.setIcon(self.icon_inactive)
-        self.tray.setToolTip("ScreenBreak: Inactive")
+        self.tray.setToolTip(self._tooltip_text("Inactive"))
 
         self.menu = QMenu()
 
+        # --- Mode (radio) ---
         self.action_voice = QAction("Use Voice (TTS)")
         self.action_voice.setCheckable(True)
         self.action_voice.triggered.connect(lambda: self._set_mode("voice"))
@@ -153,10 +164,10 @@ class ScreenBreakTray:
         self.action_beep.setCheckable(True)
         self.action_beep.triggered.connect(lambda: self._set_mode("beep"))
 
-        # Radio behavior
         self.action_voice.setChecked(True)
         self.action_beep.setChecked(False)
 
+        # --- Mute / fullscreen ---
         self.action_mute = QAction("Muted")
         self.action_mute.setCheckable(True)
         self.action_mute.triggered.connect(self._toggle_mute)
@@ -166,14 +177,51 @@ class ScreenBreakTray:
         self.action_fullscreen.setChecked(True)
         self.action_fullscreen.triggered.connect(self._toggle_fullscreen)
 
+        # --- Reminder Interval submenu (radio) ---
+        reminder_menu = QMenu("Reminder interval", self.menu)
+        self.reminder_group = QActionGroup(self.menu)
+        self.reminder_group.setExclusive(True)
+        self.reminder_actions = {}
+
+        for m in REMINDER_PRESETS_MIN:
+            act = QAction(f"{m} min", self.menu, checkable=True)
+            act.triggered.connect(lambda _=False, mm=m: self._set_reminder_interval_minutes(mm))
+            self.reminder_group.addAction(act)
+            reminder_menu.addAction(act)
+            self.reminder_actions[m] = act
+
+        # Set default checked
+        self.reminder_actions.get(DEFAULT_REMINDER_INTERVAL_MIN, self.reminder_actions[REMINDER_PRESETS_MIN[0]]).setChecked(True)
+
+        # --- Inactivity Limit submenu (radio) ---
+        inactivity_menu = QMenu("Inactivity limit", self.menu)
+        self.inactivity_group = QActionGroup(self.menu)
+        self.inactivity_group.setExclusive(True)
+        self.inactivity_actions = {}
+
+        for m in INACTIVITY_PRESETS_MIN:
+            act = QAction(f"{m} min", self.menu, checkable=True)
+            act.triggered.connect(lambda _=False, mm=m: self._set_inactivity_limit_minutes(mm))
+            self.inactivity_group.addAction(act)
+            inactivity_menu.addAction(act)
+            self.inactivity_actions[m] = act
+
+        # Set default checked
+        self.inactivity_actions.get(DEFAULT_INACTIVITY_LIMIT_MIN, self.inactivity_actions[INACTIVITY_PRESETS_MIN[0]]).setChecked(True)
+
+        # Quit
         self.action_quit = QAction("Quit")
         self.action_quit.triggered.connect(self._quit)
 
+        # Build menu
         self.menu.addAction(self.action_voice)
         self.menu.addAction(self.action_beep)
         self.menu.addSeparator()
         self.menu.addAction(self.action_mute)
         self.menu.addAction(self.action_fullscreen)
+        self.menu.addSeparator()
+        self.menu.addMenu(reminder_menu)
+        self.menu.addMenu(inactivity_menu)
         self.menu.addSeparator()
         self.menu.addAction(self.action_quit)
 
@@ -192,35 +240,70 @@ class ScreenBreakTray:
             ico = QIcon(path)
             if not ico.isNull():
                 return ico
-
         pm = QPixmap(64, 64)
         pm.fill(fallback_color)
         return QIcon(pm)
+    
+    def _fmt_time(self, seconds: float) -> str:
+        if seconds < 60:
+            return f"{int(seconds)}s"
+        else:
+            mins = seconds / 60
+            return f"{mins:g}m"
+
+    def _tooltip_text(self, state: str) -> str:
+        mode_txt = "Voice" if self.mode == "voice" else "Beep"
+        mute_txt = "Muted" if self.muted else "Sound on"
+        fs_txt = "FS off" if self.disable_fullscreen else "FS on"
+
+        rem_txt = self._fmt_time(self.reminder_interval_s)
+        idle_txt = self._fmt_time(self.inactivity_limit_s)
+
+        return (
+            f"ScreenBreak: {state} | {mode_txt} | {mute_txt} | "
+            f"Remind {rem_txt} | Idle {idle_txt} | {fs_txt}"
+        )
+
+    def _update_tooltip(self):
+        self.tray.setToolTip(self._tooltip_text("Active" if self.active else "Inactive"))
 
     def _set_mode(self, mode: str):
         self.mode = mode
         self.action_voice.setChecked(mode == "voice")
         self.action_beep.setChecked(mode == "beep")
+        self._update_tooltip()
 
     def _toggle_mute(self):
         self.muted = self.action_mute.isChecked()
+        self._update_tooltip()
 
     def _toggle_fullscreen(self):
         self.disable_fullscreen = self.action_fullscreen.isChecked()
+        self._update_tooltip()
+
+    def _set_reminder_interval_minutes(self, minutes: float):
+        self.reminder_interval_s = float(minutes) * 60.0
+        self.last_reminder_time = time.time()  # avoid instant fire
+        self._update_tooltip()
+
+    def _set_inactivity_limit_minutes(self, minutes: float):
+        self.inactivity_limit_s = float(minutes) * 60.0
+        self._update_tooltip()
 
     def _set_active(self):
         if not self.active:
             self.active = True
             self.last_reminder_time = time.time()
             self.tray.setIcon(self.icon_active)
-            self.tray.setToolTip("ScreenBreak: Active")
+        self._update_tooltip()
 
     def _set_inactive(self):
         if self.active:
             self.active = False
             self.tray.setIcon(self.icon_inactive)
-            self.tray.setToolTip("ScreenBreak: Inactive")
+        # Reset reminder timer while inactive
         self.last_reminder_time = time.time()
+        self._update_tooltip()
 
     def _do_reminder(self):
         if self.muted:
@@ -234,7 +317,7 @@ class ScreenBreakTray:
     def _tick(self):
         idle = get_idle_time_seconds()
 
-        if idle > INACTIVITY_LIMIT:
+        if idle > self.inactivity_limit_s:
             self._set_inactive()
             return
 
@@ -246,7 +329,7 @@ class ScreenBreakTray:
             return
 
         now = time.time()
-        if (now - self.last_reminder_time) >= REMINDER_INTERVAL:
+        if (now - self.last_reminder_time) >= self.reminder_interval_s:
             self._do_reminder()
             self.last_reminder_time = now
 
